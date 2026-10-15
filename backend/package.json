@@ -1,0 +1,12 @@
+{
+  "name": "pissarra-compartida",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pissarra col·laborativa amb cursors i dibuix en temps real",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

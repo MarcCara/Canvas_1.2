@@ -113,6 +113,32 @@ body {
   display: none;
 }
 
+#remote-cursors {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.connection-status {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  margin: 0;
+  padding: 6px 9px;
+  border-radius: 3px;
+  background: #fff;
+  color: #666;
+  font-size: 12px;
+}
+
+.connection-status[data-state="connected"] {
+  color: #267342;
+}
+
+.connection-status[data-state="error"] {
+  color: #a12622;
+}
+
 .cursor-dot {
   flex: 0 0 14px;
   width: 14px;
