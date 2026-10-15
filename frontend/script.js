@@ -11,8 +11,8 @@ const context = canvas.getContext("2d");
 
 const remoteCursors = new Map();
 const strokes = [];
+const maxStoredStrokes = 10000;
 let socket;
-let clientId;
 let cursorColor = `hsl(${Math.floor(Math.random() * 360)} 70% 45%)`;
 let previousPoint = null;
 let isDrawing = false;
@@ -56,7 +56,7 @@ function connectToBoard() {
     let message;
     try {
       message = JSON.parse(event.data);
-    } catch (error) {
+    } catch {
       connectionStatus.textContent = "El servidor ha enviat una resposta invàlida.";
       connectionStatus.dataset.state = "error";
       return;
@@ -79,7 +79,6 @@ function connectToBoard() {
 
 function handleServerMessage(message) {
   if (message.type === "init") {
-    clientId = message.id;
     cursorColor = message.color;
     cursorIndicator.style.setProperty("--cursor-color", cursorColor);
     strokes.splice(0, strokes.length, ...message.strokes);
@@ -116,7 +115,7 @@ function handleServerMessage(message) {
   }
 
   if (message.type === "draw") {
-    strokes.push(message.stroke);
+    storeStroke(message.stroke);
     drawStroke(message.stroke);
     return;
   }
@@ -128,7 +127,7 @@ function handleServerMessage(message) {
 }
 
 function addRemoteCursor(user) {
-  if (user.id === clientId || remoteCursors.has(user.id)) {
+  if (remoteCursors.has(user.id)) {
     return;
   }
 
@@ -217,6 +216,13 @@ function drawStroke(stroke) {
   context.stroke();
 }
 
+function storeStroke(stroke) {
+  strokes.push(stroke);
+  if (strokes.length > maxStoredStrokes) {
+    strokes.shift();
+  }
+}
+
 nameForm.addEventListener("submit", (event) => {
   event.preventDefault();
   userName = nameInput.value.trim();
@@ -262,7 +268,7 @@ board.addEventListener("pointermove", (event) => {
       to: normalized,
       color: cursorColor,
     };
-    strokes.push(stroke);
+    storeStroke(stroke);
     drawStroke(stroke);
     sendMessage({ type: "draw", stroke });
   }
