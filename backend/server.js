@@ -11,13 +11,11 @@ const maxStoredStrokes = 10000;
 const users = new Map();
 const strokes = [];
 
-const contentTypes = {
-  ".css": "text/css; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-};
-
-const publicFiles = new Set(["/index.html", "/styles.css", "/script.js"]);
+const publicFiles = new Map([
+  ["/index.html", "text/html; charset=utf-8"],
+  ["/styles.css", "text/css; charset=utf-8"],
+  ["/script.js", "text/javascript; charset=utf-8"],
+]);
 
 function serveFile(request, response) {
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -39,29 +37,14 @@ function serveFile(request, response) {
     pathname = "/index.html";
   }
 
-  if (!publicFiles.has(pathname)) {
-    response.writeHead(404);
-    response.end("Not found");
-    return;
-  }
-
-  const filePath = path.resolve(publicDirectory, `.${pathname}`);
-  if (
-    filePath !== publicDirectory &&
-    !filePath.startsWith(`${publicDirectory}${path.sep}`)
-  ) {
-    response.writeHead(403);
-    response.end("Forbidden");
-    return;
-  }
-
-  const contentType = contentTypes[path.extname(filePath)];
+  const contentType = publicFiles.get(pathname);
   if (!contentType) {
     response.writeHead(404);
     response.end("Not found");
     return;
   }
 
+  const filePath = path.resolve(publicDirectory, `.${pathname}`);
   fs.stat(filePath, (statError, stats) => {
     if (statError || !stats.isFile()) {
       response.writeHead(404);

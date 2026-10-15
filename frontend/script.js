@@ -35,7 +35,7 @@ function resizeCanvas() {
     drawStroke(stroke);
   }
 
-  for (const [id, user] of remoteCursors) {
+  for (const user of remoteCursors.values()) {
     positionCursor(user.element, user.position);
   }
 }
@@ -225,7 +225,6 @@ nameForm.addEventListener("submit", (event) => {
     return;
   }
 
-  sessionStorage.setItem("canvas-user-name", userName);
   cursorName.textContent = userName;
   entryScreen.hidden = true;
   board.hidden = false;
