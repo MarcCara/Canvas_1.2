@@ -14,8 +14,8 @@
     <main>
       <section class="entry-screen" id="entry-screen" aria-labelledby="title">
         <form class="entry-card" id="name-form">
-          <h1 id="title">Benvingut a la pissarra</h1>
-          <p>Escriu el teu nom per entrar i dibuixar movent el cursor.</p>
+          <h1 id="title">Pissarra</h1>
+          <p>Escriu el teu nom per començar.</p>
           <label for="user-name">El teu nom</label>
           <input
             id="user-name"
@@ -32,6 +32,10 @@
 
       <section class="board" id="board" aria-label="Pissarra per dibuixar" hidden>
         <canvas id="drawing-canvas"></canvas>
+        <span class="cursor-indicator" id="cursor-indicator" aria-hidden="true" hidden>
+          <span class="cursor-dot"></span>
+          <span class="cursor-name" id="cursor-name"></span>
+        </span>
       </section>
     </main>
 
