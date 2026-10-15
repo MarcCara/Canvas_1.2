@@ -5,7 +5,7 @@ const { randomInt, randomUUID } = require("node:crypto");
 const { WebSocketServer, WebSocket } = require("ws");
 
 const publicDirectory = path.resolve(__dirname, "../frontend");
-const port = Number.parseInt(process.env.PORT || "3000", 10);
+const port = Number.parseInt(process.env.PORT || "40410", 10);
 const maxMessageBytes = 16 * 1024;
 const maxStoredStrokes = 10000;
 const users = new Map();

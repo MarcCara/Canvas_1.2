@@ -45,7 +45,7 @@ function connectToBoard() {
   connectionStatus.dataset.state = "connecting";
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.host || "localhost:3000";
+  const host = window.location.host || "localhost:40410";
   socket = new WebSocket(`${protocol}//${host}/ws`);
 
   socket.addEventListener("open", () => {
