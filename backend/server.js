@@ -1,20 +1,26 @@
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { randomInt, randomUUID } = require("node:crypto");
-const { WebSocketServer, WebSocket } = require("ws");
+const { randomInt } = require("node:crypto");
+const { Server } = require("socket.io");
 
 const publicDirectory = path.resolve(__dirname, "../frontend");
 const port = Number.parseInt(process.env.PORT || "40410", 10);
-const maxMessageBytes = 16 * 1024;
-const maxStoredStrokes = 10000;
-const users = new Map();
-const strokes = [];
-
+const maxStoredStrokes = 1000;
+const maxPointsPerStroke = 5000;
+const rooms = new Map();
 const publicFiles = new Map([
-  ["/index.html", "text/html; charset=utf-8"],
-  ["/styles.css", "text/css; charset=utf-8"],
-  ["/script.js", "text/javascript; charset=utf-8"],
+  ["/", ["index.html", "text/html; charset=utf-8"]],
+  ["/index.html", ["index.html", "text/html; charset=utf-8"]],
+  ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
+  ["/script.js", ["script.js", "text/javascript; charset=utf-8"]],
+  [
+    "/vue.global.prod.js",
+    [
+      "../backend/node_modules/vue/dist/vue.global.prod.js",
+      "text/javascript; charset=utf-8",
+    ],
+  ],
 ]);
 
 function serveFile(request, response) {
@@ -27,24 +33,21 @@ function serveFile(request, response) {
   let pathname;
   try {
     pathname = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
-  } catch (error) {
+  } catch {
     response.writeHead(400);
     response.end("Invalid URL");
     return;
   }
 
-  if (pathname === "/") {
-    pathname = "/index.html";
-  }
-
-  const contentType = publicFiles.get(pathname);
-  if (!contentType) {
+  const file = publicFiles.get(pathname);
+  if (!file) {
     response.writeHead(404);
     response.end("Not found");
     return;
   }
 
-  const filePath = path.resolve(publicDirectory, `.${pathname}`);
+  const [relativePath, contentType] = file;
+  const filePath = path.resolve(publicDirectory, relativePath);
   fs.stat(filePath, (statError, stats) => {
     if (statError || !stats.isFile()) {
       response.writeHead(404);
@@ -75,50 +78,34 @@ function serveFile(request, response) {
 }
 
 const server = http.createServer(serveFile);
-const webSocketServer = new WebSocketServer({
-  noServer: true,
-  maxPayload: maxMessageBytes,
-});
+const io = new Server(server, { maxHttpBufferSize: 16 * 1024 });
 
-function send(socket, message) {
-  if (socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(message));
+function roomUsers(room) {
+  return [...room.users.values()].map(({ id, username, color }) => ({
+    id,
+    username,
+    color,
+  }));
+}
+
+function publishRoomList() {
+  const roomList = [...rooms.values()]
+    .filter((room) => room.users.size > 0)
+    .map((room) => ({ name: room.name, users: room.users.size }))
+    .sort((first, second) => first.name.localeCompare(second.name));
+  io.emit("room_list", roomList);
+}
+
+function publishRoomUsers(roomKey) {
+  const room = rooms.get(roomKey);
+  if (room) {
+    io.to(roomKey).emit("room_users", roomUsers(room));
   }
 }
 
-function broadcast(message, excludedSocket) {
-  const serialized = JSON.stringify(message);
-  for (const socket of webSocketServer.clients) {
-    if (
-      socket !== excludedSocket &&
-      socket.readyState === WebSocket.OPEN &&
-      socket.bufferedAmount < 1024 * 1024
-    ) {
-      socket.send(serialized);
-    }
-  }
-}
-
-function isNormalizedPoint(point) {
-  return (
-    point !== null &&
-    typeof point === "object" &&
-    Number.isFinite(point.x) &&
-    Number.isFinite(point.y) &&
-    point.x >= 0 &&
-    point.x <= 1 &&
-    point.y >= 0 &&
-    point.y <= 1
-  );
-}
-
-function sendError(socket, message) {
-  send(socket, { type: "error", message });
-}
-
-function generateUniqueColor() {
+function colorForRoom(room) {
   const activeColors = new Set(
-    [...users.values()].map((user) => user.color),
+    [...room.users.values()].map((user) => user.color),
   );
   const startingHue = randomInt(0, 360);
 
@@ -136,169 +123,230 @@ function generateUniqueColor() {
       }
     }
   }
-
   return null;
 }
 
-webSocketServer.on("connection", (socket) => {
-  socket.on("message", (data, isBinary) => {
-    if (isBinary) {
-      sendError(socket, "Només s'accepten missatges de text.");
+function validPoint(point) {
+  return (
+    point !== null &&
+    typeof point === "object" &&
+    Number.isFinite(point.x) &&
+    Number.isFinite(point.y) &&
+    point.x >= 0 &&
+    point.x <= 1 &&
+    point.y >= 0 &&
+    point.y <= 1
+  );
+}
+
+function endActiveStroke(socket, room) {
+  const strokeId = room.activeStrokes.get(socket.id);
+  if (strokeId) {
+    room.activeStrokes.delete(socket.id);
+    socket.to(room.key).emit("draw_end", { strokeId });
+  }
+}
+
+function removeFromRoom(socket) {
+  const user = socket.data.user;
+  if (!user) {
+    return;
+  }
+
+  const room = rooms.get(user.roomKey);
+  socket.data.user = null;
+  if (!room) {
+    return;
+  }
+
+  endActiveStroke(socket, room);
+  room.users.delete(socket.id);
+  socket.leave(user.roomKey);
+  publishRoomUsers(user.roomKey);
+  publishRoomList();
+}
+
+function reportError(socket, message) {
+  socket.emit("server_error", message);
+}
+
+io.on("connection", (socket) => {
+  socket.emit(
+    "room_list",
+    [...rooms.values()]
+      .filter((room) => room.users.size > 0)
+      .map((room) => ({ name: room.name, users: room.users.size }))
+      .sort((first, second) => first.name.localeCompare(second.name)),
+  );
+
+  socket.on("join_room", (payload, acknowledge) => {
+    const reply = typeof acknowledge === "function" ? acknowledge : () => {};
+    const username =
+      typeof payload?.username === "string" ? payload.username.trim() : "";
+    const roomName =
+      typeof payload?.roomName === "string" ? payload.roomName.trim() : "";
+
+    if (!username || username.length > 32) {
+      reply({ ok: false, error: "El nom ha de tenir entre 1 i 32 caràcters." });
+      return;
+    }
+    if (!roomName || roomName.length > 40) {
+      reply({ ok: false, error: "La sala ha de tenir entre 1 i 40 caràcters." });
       return;
     }
 
-    let message;
-    try {
-      message = JSON.parse(data.toString());
-    } catch (error) {
-      sendError(socket, "El missatge no és JSON vàlid.");
-      return;
-    }
-
-    if (!message || typeof message !== "object" || typeof message.type !== "string") {
-      sendError(socket, "Format de missatge invàlid.");
-      return;
-    }
-
-    if (message.type === "join") {
-      if (users.has(socket)) {
-        sendError(socket, "Ja t'has unit a la pissarra.");
-        return;
-      }
-
-      if (
-        typeof message.name !== "string" ||
-        message.name.trim().length === 0 ||
-        message.name.trim().length > 32
-      ) {
-        sendError(socket, "El nom ha de tenir entre 1 i 32 caràcters.");
-        return;
-      }
-
-      const color = generateUniqueColor();
-      if (!color) {
-        sendError(socket, "No hi ha colors disponibles per a una nova connexió.");
-        return;
-      }
-
-      const user = {
-        id: randomUUID(),
-        name: message.name.trim(),
-        color,
-        x: 0,
-        y: 0,
-        visible: false,
+    removeFromRoom(socket);
+    const roomKey = roomName.toLowerCase();
+    let room = rooms.get(roomKey);
+    if (!room) {
+      room = {
+        key: roomKey,
+        name: roomName,
+        users: new Map(),
+        strokes: [],
+        activeStrokes: new Map(),
       };
-      users.set(socket, user);
+      rooms.set(roomKey, room);
+    }
 
-      send(socket, {
-        type: "init",
-        id: user.id,
-        color: user.color,
-        users: [...users.values()]
-          .filter((otherUser) => otherUser.id !== user.id)
-          .map((otherUser) => ({ ...otherUser })),
-        strokes,
-      });
-      broadcast({ type: "user-joined", user }, socket);
+    const color = colorForRoom(room);
+    if (!color) {
+      reply({ ok: false, error: "No hi ha colors disponibles per a aquesta sala." });
       return;
     }
 
-    const user = users.get(socket);
+    const user = { id: socket.id, username, color, roomKey };
+    room.users.set(socket.id, user);
+    socket.data.user = user;
+    socket.join(roomKey);
+
+    reply({
+      ok: true,
+      id: user.id,
+      color: user.color,
+      roomName: room.name,
+      strokes: room.strokes,
+      users: roomUsers(room),
+    });
+    publishRoomUsers(roomKey);
+    publishRoomList();
+  });
+
+  socket.on("cursor_move", (payload) => {
+    const user = socket.data.user;
     if (!user) {
-      sendError(socket, "Uneix-te a la pissarra abans d'enviar dades.");
+      reportError(socket, "Uneix-te a una sala abans de moure el cursor.");
       return;
     }
+    if (payload?.visible === false) {
+      socket.to(user.roomKey).emit("cursor_move", {
+        id: socket.id,
+        visible: false,
+      });
+      return;
+    }
+    if (!validPoint(payload)) {
+      reportError(socket, "La posició del cursor no és vàlida.");
+      return;
+    }
+    socket.to(user.roomKey).emit("cursor_move", {
+      id: socket.id,
+      x: payload.x,
+      y: payload.y,
+      visible: true,
+    });
+  });
 
-    if (message.type === "cursor") {
-      if (
-        typeof message.visible !== "boolean" ||
-        (message.visible &&
-          (!Number.isFinite(message.x) ||
-            !Number.isFinite(message.y) ||
-            message.x < 0 ||
-            message.x > 1 ||
-            message.y < 0 ||
-            message.y > 1))
-      ) {
-        sendError(socket, "La posició del cursor no és vàlida.");
-        return;
-      }
-
-      user.visible = message.visible;
-      if (message.visible) {
-        user.x = message.x;
-        user.y = message.y;
-      }
-      broadcast(
-        {
-          type: "cursor",
-          id: user.id,
-          x: user.x,
-          y: user.y,
-          visible: user.visible,
-        },
+  socket.on("draw_begin", (payload) => {
+    const user = socket.data.user;
+    const room = user && rooms.get(user.roomKey);
+    if (
+      !user ||
+      !room ||
+      !payload ||
+      typeof payload !== "object" ||
+      !validPoint(payload?.point) ||
+      !Number.isFinite(payload.width) ||
+      payload.width < 1 ||
+      payload.width > 40 ||
+      (payload.tool !== undefined &&
+        payload.tool !== "brush" &&
+        payload.tool !== "eraser") ||
+      typeof payload.color !== "string" ||
+      !/^#[0-9a-f]{6}$/i.test(payload.color)
+    ) {
+      reportError(
         socket,
+        "El traç no és vàlid. Comprova el color, el gruix i la posició.",
       );
       return;
     }
 
-    if (message.type === "draw") {
-      const stroke = message.stroke;
-      if (
-        !stroke ||
-        !isNormalizedPoint(stroke.from) ||
-        !isNormalizedPoint(stroke.to)
-      ) {
-        sendError(socket, "El traç no té una posició vàlida.");
-        return;
-      }
+    endActiveStroke(socket, room);
+    const stroke = {
+      id: `${socket.id}:${Date.now()}:${randomInt(0, 1_000_000)}`,
+      color: payload.color,
+      width: payload.width,
+      tool: payload.tool || "brush",
+      points: [payload.point],
+    };
+    room.strokes.push(stroke);
+    if (room.strokes.length > maxStoredStrokes) {
+      room.strokes.shift();
+    }
+    room.activeStrokes.set(socket.id, stroke.id);
+    socket.to(user.roomKey).emit("draw_begin", { stroke });
+  });
 
-      const sharedStroke = {
-        from: stroke.from,
-        to: stroke.to,
-        color: user.color,
-      };
-      strokes.push(sharedStroke);
-      if (strokes.length > maxStoredStrokes) {
-        strokes.shift();
-      }
-      broadcast({ type: "draw", stroke: sharedStroke }, socket);
+  socket.on("draw_move", (payload) => {
+    const user = socket.data.user;
+    const room = user && rooms.get(user.roomKey);
+    if (!user || !room || !validPoint(payload?.point)) {
+      reportError(socket, "El punt del traç no és vàlid.");
       return;
     }
 
-    sendError(socket, `Tipus de missatge desconegut: ${message.type}`);
+    const strokeId = room.activeStrokes.get(socket.id);
+    const stroke = room.strokes.find((candidate) => candidate.id === strokeId);
+    if (!stroke) {
+      reportError(socket, "No hi ha cap traç actiu per continuar.");
+      return;
+    }
+    if (stroke.points.length >= maxPointsPerStroke) {
+      endActiveStroke(socket, room);
+      return;
+    }
+
+    stroke.points.push(payload.point);
+    socket.to(user.roomKey).emit("draw_move", {
+      strokeId,
+      point: payload.point,
+    });
   });
 
-  socket.on("close", () => {
-    const user = users.get(socket);
-    if (user) {
-      users.delete(socket);
-      broadcast({ type: "user-left", id: user.id });
+  socket.on("draw_end", () => {
+    const user = socket.data.user;
+    const room = user && rooms.get(user.roomKey);
+    if (user && room) {
+      endActiveStroke(socket, room);
     }
   });
 
-  socket.on("error", (error) => {
-    console.error("WebSocket connection error:", error.message);
+  socket.on("clear_canvas", () => {
+    const user = socket.data.user;
+    const room = user && rooms.get(user.roomKey);
+    if (!user || !room) {
+      reportError(socket, "Uneix-te a una sala abans de netejar la pissarra.");
+      return;
+    }
+
+    room.strokes.length = 0;
+    room.activeStrokes.clear();
+    io.to(user.roomKey).emit("clear_canvas");
   });
-});
 
-server.on("upgrade", (request, socket, head) => {
-  let pathname;
-  try {
-    pathname = new URL(request.url, "http://localhost").pathname;
-  } catch (error) {
-    socket.destroy();
-    return;
-  }
-
-  if (pathname !== "/ws") {
-    socket.destroy();
-    return;
-  }
-
-  webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
-    webSocketServer.emit("connection", webSocket, request);
+  socket.on("disconnect", () => {
+    removeFromRoom(socket);
   });
 });
 

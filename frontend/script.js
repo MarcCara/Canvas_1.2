@@ -1,299 +1,401 @@
-const entryScreen = document.querySelector("#entry-screen");
-const nameForm = document.querySelector("#name-form");
-const nameInput = document.querySelector("#user-name");
-const board = document.querySelector("#board");
-const canvas = document.querySelector("#drawing-canvas");
-const cursorIndicator = document.querySelector("#cursor-indicator");
-const cursorName = document.querySelector("#cursor-name");
-const remoteCursorsElement = document.querySelector("#remote-cursors");
-const connectionStatus = document.querySelector("#connection-status");
-const context = canvas.getContext("2d");
+const { createApp, nextTick, onBeforeUnmount, onMounted, reactive, ref } = Vue;
+const maxLocalPointsPerStroke = 5000;
 
-const remoteCursors = new Map();
-const strokes = [];
-const maxStoredStrokes = 10000;
-let socket;
-let cursorColor = `hsl(${Math.floor(Math.random() * 360)} 70% 45%)`;
-let previousPoint = null;
-let isDrawing = false;
-let userName = "";
+createApp({
+  setup() {
+    const username = ref("");
+    const roomName = ref("");
+    const currentRoom = ref("");
+    const connected = ref(false);
+    const inRoom = ref(false);
+    const error = ref("");
+    const rooms = ref([]);
+    const users = ref([]);
+    const cursors = reactive([]);
+    const strokes = ref([]);
+    const brushColor = ref("#2f7460");
+    const brushWidth = ref(4);
+    const activeTool = ref("brush");
+    const menuOpen = ref(false);
+    const selfId = ref("");
+    const boardElement = ref(null);
+    const canvasElement = ref(null);
+    let socket;
+    let context;
+    let drawingPointerId = null;
+    let previousPoint = null;
+    let activeStroke = null;
+    let restoreSession = false;
+    let resizeObserver;
 
-cursorIndicator.style.setProperty("--cursor-color", cursorColor);
-
-function resizeCanvas() {
-  const pixelRatio = window.devicePixelRatio || 1;
-  const bounds = board.getBoundingClientRect();
-
-  canvas.width = Math.round(bounds.width * pixelRatio);
-  canvas.height = Math.round(bounds.height * pixelRatio);
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  context.lineWidth = 4;
-  context.lineCap = "round";
-  context.lineJoin = "round";
-
-  for (const stroke of strokes) {
-    drawStroke(stroke);
-  }
-
-  for (const user of remoteCursors.values()) {
-    positionCursor(user.element, user.position);
-  }
-}
-
-function connectToBoard() {
-  connectionStatus.textContent = "Connectant al servidor...";
-  connectionStatus.dataset.state = "connecting";
-
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.host || "localhost:40410";
-  socket = new WebSocket(`${protocol}//${host}/ws`);
-
-  socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: "join", name: userName }));
-  });
-
-  socket.addEventListener("message", (event) => {
-    let message;
-    try {
-      message = JSON.parse(event.data);
-    } catch {
-      connectionStatus.textContent = "El servidor ha enviat una resposta invàlida.";
-      connectionStatus.dataset.state = "error";
-      return;
+    function cursorStyle(cursor) {
+      const board = boardElement.value;
+      return {
+        left: `${cursor.x * (board?.clientWidth || 0)}px`,
+        top: `${cursor.y * (board?.clientHeight || 0)}px`,
+        "--cursor-color": cursor.color,
+      };
     }
 
-    handleServerMessage(message);
-  });
-
-  socket.addEventListener("error", () => {
-    connectionStatus.textContent = "No s'ha pogut connectar amb el servidor.";
-    connectionStatus.dataset.state = "error";
-  });
-
-  socket.addEventListener("close", () => {
-    connectionStatus.textContent = "Desconnectat del servidor.";
-    connectionStatus.dataset.state = "error";
-    clearRemoteCursors();
-  });
-}
-
-function handleServerMessage(message) {
-  if (message.type === "init") {
-    cursorColor = message.color;
-    cursorIndicator.style.setProperty("--cursor-color", cursorColor);
-    strokes.splice(0, strokes.length, ...message.strokes);
-    resizeCanvas();
-
-    for (const user of message.users) {
-      addRemoteCursor(user);
+    function normalizedPosition(event) {
+      const bounds = boardElement.value.getBoundingClientRect();
+      return {
+        x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+        y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+      };
     }
 
-    updateConnectionStatus();
-    return;
-  }
-
-  if (message.type === "user-joined") {
-    addRemoteCursor(message.user);
-    updateConnectionStatus();
-    return;
-  }
-
-  if (message.type === "user-left") {
-    removeRemoteCursor(message.id);
-    updateConnectionStatus();
-    return;
-  }
-
-  if (message.type === "cursor") {
-    const user = remoteCursors.get(message.id);
-    if (user) {
-      user.position = { x: message.x, y: message.y };
-      user.element.hidden = !message.visible;
-      positionCursor(user.element, user.position);
+    function drawSegment(stroke, from, to) {
+      const board = boardElement.value;
+      if (!context || !board) {
+        return;
+      }
+      context.strokeStyle = stroke.color;
+      context.fillStyle = stroke.color;
+      context.lineWidth = stroke.width;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.globalCompositeOperation =
+        stroke.tool === "eraser" ? "destination-out" : "source-over";
+      context.beginPath();
+      if (from === to) {
+        context.arc(
+          from.x * board.clientWidth,
+          from.y * board.clientHeight,
+          stroke.width / 2,
+          0,
+          Math.PI * 2,
+        );
+        context.fill();
+        context.globalCompositeOperation = "source-over";
+        return;
+      }
+      context.moveTo(from.x * board.clientWidth, from.y * board.clientHeight);
+      context.lineTo(to.x * board.clientWidth, to.y * board.clientHeight);
+      context.stroke();
+      context.globalCompositeOperation = "source-over";
     }
-    return;
-  }
 
-  if (message.type === "draw") {
-    storeStroke(message.stroke);
-    drawStroke(message.stroke);
-    return;
-  }
+    function renderStroke(stroke) {
+      if (stroke.points.length === 1) {
+        drawSegment(stroke, stroke.points[0], stroke.points[0]);
+        return;
+      }
+      for (let index = 1; index < stroke.points.length; index += 1) {
+        drawSegment(stroke, stroke.points[index - 1], stroke.points[index]);
+      }
+    }
 
-  if (message.type === "error") {
-    connectionStatus.textContent = `Error del servidor: ${message.message}`;
-    connectionStatus.dataset.state = "error";
-  }
-}
+    function resizeCanvas() {
+      const board = boardElement.value;
+      const canvas = canvasElement.value;
+      if (!board || !canvas) {
+        return;
+      }
 
-function addRemoteCursor(user) {
-  if (remoteCursors.has(user.id)) {
-    return;
-  }
+      const pixelRatio = window.devicePixelRatio || 1;
+      canvas.width = Math.round(board.clientWidth * pixelRatio);
+      canvas.height = Math.round(board.clientHeight * pixelRatio);
+      context = canvas.getContext("2d");
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      for (const stroke of strokes.value) {
+        renderStroke(stroke);
+      }
+    }
 
-  const indicator = document.createElement("span");
-  indicator.className = "cursor-indicator";
-  indicator.setAttribute("aria-hidden", "true");
-  indicator.style.setProperty("--cursor-color", user.color);
-  indicator.hidden = true;
+    function joinRoom(requestedRoom = roomName.value) {
+      const name = username.value.trim();
+      const room = requestedRoom.trim();
+      error.value = "";
+      if (!name || !room) {
+        error.value = "Escriu el teu nom i el nom de la sala.";
+        return;
+      }
+      if (!connected.value) {
+        error.value = "No hi ha connexió amb el servidor. Torna-ho a provar.";
+        return;
+      }
 
-  const dot = document.createElement("span");
-  dot.className = "cursor-dot";
-  const label = document.createElement("span");
-  label.className = "cursor-name";
-  label.textContent = user.name;
-  indicator.append(dot, label);
-  remoteCursorsElement.append(indicator);
+      username.value = name;
+      roomName.value = room;
+      socket.emit("join_room", { username: name, roomName: room }, (result) => {
+        if (!result?.ok) {
+          error.value = result?.error || "No s'ha pogut entrar a la sala.";
+          return;
+        }
 
-  const position = { x: user.x, y: user.y };
-  remoteCursors.set(user.id, {
-    element: indicator,
-    position,
-  });
-  indicator.hidden = !user.visible;
-  positionCursor(indicator, position);
-}
+        currentRoom.value = result.roomName;
+        selfId.value = result.id;
+        strokes.value = result.strokes;
+        users.value = result.users;
+        cursors.splice(0, cursors.length);
+        inRoom.value = true;
+        error.value = "";
+        sessionStorage.setItem("paintrooms-session", JSON.stringify({
+          username: name,
+          roomName: result.roomName,
+        }));
+        nextTick(() => {
+          resizeCanvas();
+          resizeObserver?.observe(boardElement.value);
+        });
+      });
+    }
 
-function removeRemoteCursor(id) {
-  const user = remoteCursors.get(id);
-  if (!user) {
-    return;
-  }
+    function leaveRoom() {
+      sessionStorage.removeItem("paintrooms-session");
+      socket.disconnect();
+      inRoom.value = false;
+      currentRoom.value = "";
+      users.value = [];
+      cursors.splice(0, cursors.length);
+      strokes.value = [];
+      selfId.value = "";
+      activeStroke = null;
+      drawingPointerId = null;
+      socket.connect();
+    }
 
-  user.element.remove();
-  remoteCursors.delete(id);
-}
+    function startDrawing(event) {
+      menuOpen.value = false;
+      if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) {
+        return;
+      }
+      if (!connected.value) {
+        error.value = "Espera que es recuperi la connexió per dibuixar.";
+        return;
+      }
 
-function clearRemoteCursors() {
-  for (const user of remoteCursors.values()) {
-    user.element.remove();
-  }
-  remoteCursors.clear();
-}
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      drawingPointerId = event.pointerId;
+      previousPoint = normalizedPosition(event);
+      activeStroke = {
+        id: "",
+        color: brushColor.value,
+        width: brushWidth.value,
+        tool: activeTool.value,
+        points: [previousPoint],
+      };
+      strokes.value.push(activeStroke);
+      renderStroke(activeStroke);
+      socket.emit("draw_begin", {
+        point: previousPoint,
+        color: activeStroke.color,
+        width: activeStroke.width,
+        tool: activeStroke.tool,
+      });
+      socket.emit("cursor_move", { ...previousPoint, visible: true });
+    }
 
-function updateConnectionStatus() {
-  const userCount = remoteCursors.size + 1;
-  connectionStatus.textContent = `Connectat · ${userCount} ${
-    userCount === 1 ? "usuari" : "usuaris"
-  }`;
-  connectionStatus.dataset.state = "connected";
-}
+    function movePointer(event) {
+      if (!inRoom.value) {
+        return;
+      }
+      const point = normalizedPosition(event);
+      socket.emit("cursor_move", { ...point, visible: true });
 
-function positionCursor(element, position) {
-  const bounds = board.getBoundingClientRect();
-  element.style.left = `${position.x * bounds.width}px`;
-  element.style.top = `${position.y * bounds.height}px`;
-}
+      if (drawingPointerId !== event.pointerId || !activeStroke || !previousPoint) {
+        return;
+      }
+      if (activeStroke.points.length >= maxLocalPointsPerStroke) {
+        return;
+      }
+      activeStroke.points.push(point);
+      drawSegment(activeStroke, previousPoint, point);
+      previousPoint = point;
+      socket.emit("draw_move", { point });
+    }
 
-function sendMessage(message) {
-  if (socket?.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(message));
-  }
-}
+    function stopDrawing(event) {
+      if (drawingPointerId === null || event.pointerId !== drawingPointerId) {
+        return;
+      }
+      socket.emit("draw_end");
+      drawingPointerId = null;
+      previousPoint = null;
+      activeStroke = null;
+    }
 
-function getPointerPosition(event) {
-  const bounds = board.getBoundingClientRect();
-  return {
-    x: Math.max(0, Math.min(event.clientX - bounds.left, bounds.width)),
-    y: Math.max(0, Math.min(event.clientY - bounds.top, bounds.height)),
-  };
-}
+    function hidePointer() {
+      if (inRoom.value && connected.value) {
+        socket.emit("cursor_move", { visible: false });
+      }
+    }
 
-function normalizedPosition(point) {
-  const bounds = board.getBoundingClientRect();
-  return {
-    x: point.x / bounds.width,
-    y: point.y / bounds.height,
-  };
-}
+    function clearCanvas() {
+      if (connected.value) {
+        socket.emit("clear_canvas");
+      }
+    }
 
-function drawStroke(stroke) {
-  const bounds = board.getBoundingClientRect();
-  context.strokeStyle = stroke.color;
-  context.beginPath();
-  context.moveTo(stroke.from.x * bounds.width, stroke.from.y * bounds.height);
-  context.lineTo(stroke.to.x * bounds.width, stroke.to.y * bounds.height);
-  context.stroke();
-}
+    function addOrUpdateCursor(cursor) {
+      let existing = cursors.find((item) => item.id === cursor.id);
+      if (!existing) {
+        existing = { ...cursor, x: 0, y: 0, visible: false };
+        cursors.push(existing);
+      }
+      Object.assign(existing, cursor);
+    }
 
-function storeStroke(stroke) {
-  strokes.push(stroke);
-  if (strokes.length > maxStoredStrokes) {
-    strokes.shift();
-  }
-}
+    function applyRoomUsers(nextUsers) {
+      users.value = nextUsers;
+      const activeIds = new Set(nextUsers.map((user) => user.id));
+      for (let index = cursors.length - 1; index >= 0; index -= 1) {
+        if (!activeIds.has(cursors[index].id)) {
+          cursors.splice(index, 1);
+        }
+      }
+      for (const user of nextUsers) {
+        if (user.id !== selfId.value) {
+          addOrUpdateCursor({
+            id: user.id,
+            username: user.username,
+            color: user.color,
+          });
+        }
+      }
+    }
 
-nameForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  userName = nameInput.value.trim();
-  if (!userName) {
-    nameInput.focus();
-    return;
-  }
+    function handleRoomUsers(nextUsers) {
+      if (inRoom.value) {
+        applyRoomUsers(nextUsers);
+      }
+    }
 
-  cursorName.textContent = userName;
-  entryScreen.hidden = true;
-  board.hidden = false;
-  resizeCanvas();
-  connectToBoard();
-});
+    function handleCursorMove(cursor) {
+      const existing = cursors.find((item) => item.id === cursor.id);
+      if (!existing) {
+        return;
+      }
+      if (!cursor.visible) {
+        existing.visible = false;
+        return;
+      }
+      Object.assign(existing, cursor);
+    }
 
-board.addEventListener("pointerdown", (event) => {
-  if (!event.isPrimary || event.button !== 0) {
-    return;
-  }
+    function handleDrawBegin({ stroke }) {
+      strokes.value.push(stroke);
+      const localStroke = strokes.value[strokes.value.length - 1];
+      renderStroke(localStroke);
+    }
 
-  isDrawing = true;
-  previousPoint = getPointerPosition(event);
-  board.setPointerCapture(event.pointerId);
-});
+    function handleDrawMove({ strokeId, point }) {
+      const stroke = strokes.value.find((item) => item.id === strokeId);
+      if (!stroke || stroke.points.length >= maxLocalPointsPerStroke) {
+        return;
+      }
+      const previous = stroke.points[stroke.points.length - 1];
+      stroke.points.push(point);
+      drawSegment(stroke, previous, point);
+    }
 
-board.addEventListener("pointermove", (event) => {
-  const point = getPointerPosition(event);
-  const normalized = normalizedPosition(point);
-  cursorIndicator.style.left = `${point.x}px`;
-  cursorIndicator.style.top = `${point.y}px`;
-  cursorIndicator.hidden = false;
+    function handleClearCanvas() {
+      strokes.value = [];
+      if (context && canvasElement.value) {
+        context.clearRect(
+          0,
+          0,
+          canvasElement.value.width,
+          canvasElement.value.height,
+        );
+      }
+      activeStroke = null;
+      drawingPointerId = null;
+    }
 
-  sendMessage({
-    type: "cursor",
-    x: normalized.x,
-    y: normalized.y,
-    visible: true,
-  });
+    function handleConnect() {
+      connected.value = true;
+      if (restoreSession || inRoom.value) {
+        restoreSession = false;
+        joinRoom(currentRoom.value || roomName.value);
+      }
+    }
 
-  if (isDrawing && previousPoint) {
-    const stroke = {
-      from: normalizedPosition(previousPoint),
-      to: normalized,
-      color: cursorColor,
+    function handleDisconnect() {
+      connected.value = false;
+      cursors.splice(0, cursors.length);
+      if (inRoom.value) {
+        users.value = [];
+      }
+      drawingPointerId = null;
+      activeStroke = null;
+      previousPoint = null;
+    }
+
+    onMounted(() => {
+      const saved = sessionStorage.getItem("paintrooms-session");
+      if (saved) {
+        try {
+          const session = JSON.parse(saved);
+          if (
+            typeof session.username === "string" &&
+            typeof session.roomName === "string"
+          ) {
+            username.value = session.username;
+            roomName.value = session.roomName;
+            restoreSession = true;
+          }
+        } catch (parseError) {
+          console.error("No s'ha pogut recuperar la sessió de PaintRooms.", parseError);
+          sessionStorage.removeItem("paintrooms-session");
+        }
+      }
+
+      socket = window.io();
+      socket.on("connect", handleConnect);
+      socket.on("disconnect", handleDisconnect);
+      socket.on("connect_error", (connectError) => {
+        connected.value = false;
+        error.value = `No s'ha pogut connectar: ${connectError.message}`;
+      });
+      socket.on("room_list", (nextRooms) => {
+        rooms.value = nextRooms;
+      });
+      socket.on("room_users", handleRoomUsers);
+      socket.on("cursor_move", handleCursorMove);
+      socket.on("draw_begin", handleDrawBegin);
+      socket.on("draw_move", handleDrawMove);
+      socket.on("clear_canvas", handleClearCanvas);
+      socket.on("server_error", (message) => {
+        error.value = message;
+      });
+      resizeObserver = new ResizeObserver(resizeCanvas);
+      window.addEventListener("resize", resizeCanvas);
+    });
+
+    onBeforeUnmount(() => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", resizeCanvas);
+      socket?.disconnect();
+    });
+
+    return {
+      boardElement,
+      activeTool,
+      brushColor,
+      brushWidth,
+      clearCanvas,
+      connected,
+      cursors,
+      currentRoom,
+      cursorStyle,
+      error,
+      inRoom,
+      joinRoom,
+      leaveRoom,
+      menuOpen,
+      movePointer,
+      rooms,
+      selfId,
+      startDrawing,
+      stopDrawing,
+      users,
+      username,
+      roomName,
+      hidePointer,
+      canvasElement,
     };
-    storeStroke(stroke);
-    drawStroke(stroke);
-    sendMessage({ type: "draw", stroke });
-  }
-
-  if (isDrawing) {
-    previousPoint = point;
-  }
-});
-
-function stopDrawing() {
-  isDrawing = false;
-  previousPoint = null;
-}
-
-board.addEventListener("pointerleave", () => {
-  cursorIndicator.hidden = true;
-  sendMessage({ type: "cursor", visible: false });
-});
-
-board.addEventListener("pointerup", stopDrawing);
-board.addEventListener("pointercancel", stopDrawing);
-board.addEventListener("lostpointercapture", stopDrawing);
-
-window.addEventListener("resize", () => {
-  if (!board.hidden) {
-    resizeCanvas();
-  }
-});
+  },
+}).mount("#app");

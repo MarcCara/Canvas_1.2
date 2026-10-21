@@ -2,11 +2,12 @@
   "name": "pissarra-compartida",
   "version": "1.0.0",
   "private": true,
-  "description": "Pissarra col·laborativa amb cursors i dibuix en temps real",
+  "description": "PaintRooms: pissarra col·laborativa amb Vue i Socket.IO",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "ws": "^8.18.3"
+    "socket.io": "^4.8.1",
+    "vue": "^3.5.13"
   }
 }

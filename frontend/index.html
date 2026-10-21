@@ -5,44 +5,213 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Una pissarra en blanc per dibuixar movent el cursor."
+      content="Pissarra col·laborativa per dibuixar en temps real."
     />
     <title>Pissarra compartida</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="/socket.io/socket.io.js" defer></script>
+    <script src="/vue.global.prod.js" defer></script>
+    <script src="script.js" defer></script>
   </head>
   <body>
-    <main>
-      <section class="entry-screen" id="entry-screen" aria-labelledby="title">
-        <form class="entry-card" id="name-form">
-          <h1 id="title">Pissarra</h1>
-          <p>Escriu el teu nom per començar.</p>
-          <label for="user-name">El teu nom</label>
+    <main id="app">
+      <section v-if="!inRoom" class="lobby">
+        <form class="lobby-card" @submit.prevent="joinRoom()">
+          <h1>Idees que prenen forma, juntes.</h1>
+          <p class="intro">
+            Tria un nom, crea una sala o entra en una de les pissarres obertes.
+          </p>
+
+          <label for="username">El teu nom</label>
           <input
-            id="user-name"
-            name="name"
+            id="username"
+            v-model="username"
             type="text"
             maxlength="32"
             autocomplete="name"
             placeholder="Com et dius?"
             required
           />
-          <button type="submit">Entrar</button>
+
+          <label for="room-name">Nom de la sala</label>
+          <input
+            id="room-name"
+            v-model="roomName"
+            type="text"
+            maxlength="40"
+            placeholder="Per exemple, Prova"
+            required
+          />
+          <button class="primary-button" type="submit" :disabled="!connected">
+            {{ connected ? "Crear o unir-me a la sala" : "Connectant..." }}
+          </button>
+
+          <p v-if="error" class="error-message" role="alert">{{ error }}</p>
+          <section class="room-directory" aria-labelledby="rooms-title">
+            <div class="section-heading">
+              <h2 id="rooms-title">Sales actives</h2>
+              <span>{{ rooms.length }}</span>
+            </div>
+            <p v-if="rooms.length === 0" class="empty-state">
+              Encara no hi ha cap sala oberta.
+            </p>
+            <ul v-else>
+              <li v-for="room in rooms" :key="room.name">
+                <button
+                  class="room-link"
+                  type="button"
+                  :disabled="!connected"
+                  @click="joinRoom(room.name)"
+                >
+                  <span class="room-avatar" aria-hidden="true">#</span>
+                  <span class="room-link-name">{{ room.name }}</span>
+                  <span class="room-count">
+                    {{ room.users }} {{ room.users === 1 ? "persona" : "persones" }}
+                  </span>
+                  <span class="room-arrow" aria-hidden="true">↗</span>
+                </button>
+              </li>
+            </ul>
+          </section>
+          <p class="connection-note" :data-state="connected ? 'connected' : 'offline'">
+            <span class="status-dot"></span>
+            {{ connected ? "Connexió en directe" : "Connectant amb el servidor..." }}
+          </p>
         </form>
       </section>
 
-      <section class="board" id="board" aria-label="Pissarra per dibuixar" hidden>
-        <canvas id="drawing-canvas"></canvas>
-        <span class="cursor-indicator" id="cursor-indicator" aria-hidden="true" hidden>
-          <span class="cursor-dot"></span>
-          <span class="cursor-name" id="cursor-name"></span>
-        </span>
-        <div id="remote-cursors" aria-hidden="true"></div>
-        <p class="connection-status" id="connection-status" role="status">
-          Desconnectat del servidor.
-        </p>
+      <section v-else class="room-screen">
+        <header class="toolbar">
+          <div class="toolbar-brand">
+            <h1>{{ currentRoom }}</h1>
+          </div>
+          <div class="drawing-tools" aria-label="Controls de dibuix">
+            <label class="color-control" title="Color del traç">
+              <span>Color</span>
+              <input v-model="brushColor" type="color" aria-label="Color del traç" />
+            </label>
+            <label class="width-control">
+              <span>Gruix</span>
+              <input
+                v-model.number="brushWidth"
+                type="range"
+                min="1"
+                max="24"
+                aria-label="Gruix del traç"
+              />
+              <output>{{ brushWidth }} px</output>
+            </label>
+            <span class="tool-divider" aria-hidden="true"></span>
+            <button
+              class="tool-button"
+              :class="{ selected: activeTool === 'brush' }"
+              type="button"
+              :aria-pressed="activeTool === 'brush'"
+              @click="activeTool = 'brush'"
+            >
+              Pinzell
+            </button>
+            <button
+              class="tool-button eraser-tool"
+              :class="{ selected: activeTool === 'eraser' }"
+              type="button"
+              :aria-pressed="activeTool === 'eraser'"
+              @click="activeTool = 'eraser'"
+            >
+              Esborrador
+            </button>
+          </div>
+          <div class="toolbar-end">
+            <span class="room-connection" :data-state="connected ? 'connected' : 'offline'">
+              <span class="status-dot"></span>
+              {{ connected ? "En directe" : "Reconnexió..." }}
+            </span>
+            <div class="room-menu">
+              <button
+                class="menu-trigger"
+                type="button"
+                :aria-expanded="menuOpen"
+                aria-controls="room-menu-panel"
+                @click="menuOpen = !menuOpen"
+              >
+                Sala
+                <span class="menu-count">{{ users.length }}</span>
+                <span class="menu-chevron" aria-hidden="true">{{ menuOpen ? "⌃" : "⌄" }}</span>
+              </button>
+              <section
+                v-if="menuOpen"
+                id="room-menu-panel"
+                class="menu-panel"
+                aria-label="Menú de sala"
+              >
+                <div class="menu-heading">
+                  <div>
+                    <p class="eyebrow">ESPAI COMPARTIT</p>
+                    <h2>Participants <span>{{ users.length }}</span></h2>
+                  </div>
+                  <button
+                    class="menu-close"
+                    type="button"
+                    aria-label="Tancar menú"
+                    @click="menuOpen = false"
+                  >
+                    ×
+                  </button>
+                </div>
+                <ul class="participant-list">
+                  <li v-for="user in users" :key="user.id">
+                    <span class="participant-avatar" :style="{ '--user-color': user.color }">
+                      {{ user.username.slice(0, 1).toUpperCase() }}
+                    </span>
+                    <span class="participant-name">{{ user.username }}</span>
+                    <span v-if="user.id === selfId" class="you-label">Tu</span>
+                  </li>
+                </ul>
+                <p class="sidebar-hint">
+                  Mantén premut el ratolí o toca la pissarra per dibuixar.
+                </p>
+                <div class="menu-actions">
+                  <button class="menu-action clear-action" type="button" @click="clearCanvas">
+                    Netejar pissarra
+                  </button>
+                  <button class="menu-action leave-action" type="button" @click="leaveRoom">
+                    Sortir de la sala
+                  </button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </header>
+
+        <div class="workspace">
+          <div
+            ref="boardElement"
+            class="board"
+            :class="{ 'eraser-active': activeTool === 'eraser' }"
+            aria-label="Pissarra compartida. Dibuixa arrossegant o fent lliscar el dit."
+            @pointerdown="startDrawing"
+            @pointermove="movePointer"
+            @pointerup="stopDrawing"
+            @pointercancel="stopDrawing"
+            @lostpointercapture="stopDrawing"
+            @pointerleave="hidePointer"
+          >
+            <canvas ref="canvasElement"></canvas>
+            <span
+              v-for="cursor in cursors"
+              v-show="cursor.visible"
+              :key="cursor.id"
+              class="cursor-indicator"
+              :style="cursorStyle(cursor)"
+              aria-hidden="true"
+            >
+              <span class="cursor-dot"></span>
+              <span class="cursor-name">{{ cursor.username }}</span>
+            </span>
+            <p v-if="error" class="canvas-error" role="alert">{{ error }}</p>
+          </div>
+        </div>
       </section>
     </main>
-
-    <script src="script.js" defer></script>
   </body>
 </html>
