@@ -140,10 +140,10 @@ function validPoint(point) {
 }
 
 function endActiveStroke(socket, room) {
-  const strokeId = room.activeStrokes.get(socket.id);
-  if (strokeId) {
+  const stroke = room.activeStrokes.get(socket.id);
+  if (stroke) {
     room.activeStrokes.delete(socket.id);
-    socket.to(room.key).emit("draw_end", { strokeId });
+    socket.to(room.key).emit("draw_end", { strokeId: stroke.id });
   }
 }
 
@@ -294,7 +294,7 @@ io.on("connection", (socket) => {
     if (room.strokes.length > maxStoredStrokes) {
       room.strokes.shift();
     }
-    room.activeStrokes.set(socket.id, stroke.id);
+    room.activeStrokes.set(socket.id, stroke);
     socket.to(user.roomKey).emit("draw_begin", { stroke });
   });
 
@@ -306,8 +306,7 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const strokeId = room.activeStrokes.get(socket.id);
-    const stroke = room.strokes.find((candidate) => candidate.id === strokeId);
+    const stroke = room.activeStrokes.get(socket.id);
     if (!stroke) {
       reportError(socket, "No hi ha cap traç actiu per continuar.");
       return;
@@ -319,7 +318,7 @@ io.on("connection", (socket) => {
 
     stroke.points.push(payload.point);
     socket.to(user.roomKey).emit("draw_move", {
-      strokeId,
+      strokeId: stroke.id,
       point: payload.point,
     });
   });

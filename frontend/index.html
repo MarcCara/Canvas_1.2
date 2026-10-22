@@ -17,11 +17,6 @@
     <main id="app">
       <section v-if="!inRoom" class="lobby">
         <form class="lobby-card" @submit.prevent="joinRoom()">
-          <h1>Idees que prenen forma, juntes.</h1>
-          <p class="intro">
-            Tria un nom, crea una sala o entra en una de les pissarres obertes.
-          </p>
-
           <label for="username">El teu nom</label>
           <input
             id="username"

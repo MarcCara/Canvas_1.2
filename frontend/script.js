@@ -18,6 +18,7 @@ createApp({
     const activeTool = ref("brush");
     const menuOpen = ref(false);
     const selfId = ref("");
+    const activeRemoteStrokes = new Map();
     const boardElement = ref(null);
     const canvasElement = ref(null);
     let socket;
@@ -26,7 +27,6 @@ createApp({
     let previousPoint = null;
     let activeStroke = null;
     let restoreSession = false;
-    let resizeObserver;
 
     function cursorStyle(cursor) {
       const board = boardElement.value;
@@ -58,18 +58,6 @@ createApp({
       context.globalCompositeOperation =
         stroke.tool === "eraser" ? "destination-out" : "source-over";
       context.beginPath();
-      if (from === to) {
-        context.arc(
-          from.x * board.clientWidth,
-          from.y * board.clientHeight,
-          stroke.width / 2,
-          0,
-          Math.PI * 2,
-        );
-        context.fill();
-        context.globalCompositeOperation = "source-over";
-        return;
-      }
       context.moveTo(from.x * board.clientWidth, from.y * board.clientHeight);
       context.lineTo(to.x * board.clientWidth, to.y * board.clientHeight);
       context.stroke();
@@ -78,7 +66,23 @@ createApp({
 
     function renderStroke(stroke) {
       if (stroke.points.length === 1) {
-        drawSegment(stroke, stroke.points[0], stroke.points[0]);
+        const [point] = stroke.points;
+        const board = boardElement.value;
+        if (context && board) {
+          context.fillStyle = stroke.color;
+          context.globalCompositeOperation =
+            stroke.tool === "eraser" ? "destination-out" : "source-over";
+          context.beginPath();
+          context.arc(
+            point.x * board.clientWidth,
+            point.y * board.clientHeight,
+            stroke.width / 2,
+            0,
+            Math.PI * 2,
+          );
+          context.fill();
+          context.globalCompositeOperation = "source-over";
+        }
         return;
       }
       for (let index = 1; index < stroke.points.length; index += 1) {
@@ -127,6 +131,7 @@ createApp({
         currentRoom.value = result.roomName;
         selfId.value = result.id;
         strokes.value = result.strokes;
+        activeRemoteStrokes.clear();
         users.value = result.users;
         cursors.splice(0, cursors.length);
         inRoom.value = true;
@@ -137,7 +142,6 @@ createApp({
         }));
         nextTick(() => {
           resizeCanvas();
-          resizeObserver?.observe(boardElement.value);
         });
       });
     }
@@ -277,12 +281,12 @@ createApp({
 
     function handleDrawBegin({ stroke }) {
       strokes.value.push(stroke);
-      const localStroke = strokes.value[strokes.value.length - 1];
-      renderStroke(localStroke);
+      activeRemoteStrokes.set(stroke.id, stroke);
+      renderStroke(stroke);
     }
 
     function handleDrawMove({ strokeId, point }) {
-      const stroke = strokes.value.find((item) => item.id === strokeId);
+      const stroke = activeRemoteStrokes.get(strokeId);
       if (!stroke || stroke.points.length >= maxLocalPointsPerStroke) {
         return;
       }
@@ -291,8 +295,13 @@ createApp({
       drawSegment(stroke, previous, point);
     }
 
+    function handleDrawEnd({ strokeId }) {
+      activeRemoteStrokes.delete(strokeId);
+    }
+
     function handleClearCanvas() {
       strokes.value = [];
+      activeRemoteStrokes.clear();
       if (context && canvasElement.value) {
         context.clearRect(
           0,
@@ -319,6 +328,7 @@ createApp({
       if (inRoom.value) {
         users.value = [];
       }
+      activeRemoteStrokes.clear();
       drawingPointerId = null;
       activeStroke = null;
       previousPoint = null;
@@ -357,16 +367,15 @@ createApp({
       socket.on("cursor_move", handleCursorMove);
       socket.on("draw_begin", handleDrawBegin);
       socket.on("draw_move", handleDrawMove);
+      socket.on("draw_end", handleDrawEnd);
       socket.on("clear_canvas", handleClearCanvas);
       socket.on("server_error", (message) => {
         error.value = message;
       });
-      resizeObserver = new ResizeObserver(resizeCanvas);
       window.addEventListener("resize", resizeCanvas);
     });
 
     onBeforeUnmount(() => {
-      resizeObserver?.disconnect();
       window.removeEventListener("resize", resizeCanvas);
       socket?.disconnect();
     });

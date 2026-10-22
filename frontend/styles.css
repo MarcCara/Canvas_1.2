@@ -63,24 +63,8 @@ button:disabled {
   letter-spacing: 0.14em;
 }
 
-.lobby-card h1,
 .toolbar h1 {
   font-family: ui-sans-serif, system-ui, sans-serif;
-}
-
-.lobby-card h1 {
-  margin: 0;
-  font-size: clamp(26px, 5vw, 34px);
-  font-weight: 700;
-  letter-spacing: -0.045em;
-  line-height: 1.17;
-}
-
-.intro {
-  margin: 12px 0 28px;
-  color: #718078;
-  font-size: 14px;
-  line-height: 1.65;
 }
 
 .lobby-card > label {
