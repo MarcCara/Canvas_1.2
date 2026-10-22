@@ -63,10 +63,6 @@ button:disabled {
   letter-spacing: 0.14em;
 }
 
-.toolbar h1 {
-  font-family: ui-sans-serif, system-ui, sans-serif;
-}
-
 .lobby-card > label {
   display: block;
   margin: 17px 0 7px;
@@ -384,7 +380,6 @@ button:disabled {
   border: 2px solid #9caf9f;
   background-color: #fff;
   background-image: radial-gradient(#dce5dd 0.8px, transparent 0.8px);
-  background-position: 0 0;
   background-size: 22px 22px;
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 80%), 0 1px 5px rgb(37 57 43 / 8%);
   touch-action: none;
@@ -696,9 +691,5 @@ button:disabled {
 
   .menu-panel {
     max-height: min(65vh, 450px);
-  }
-
-  .room-connection {
-    font-size: 0;
   }
 }

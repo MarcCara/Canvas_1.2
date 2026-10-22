@@ -1,7 +1,16 @@
 const { createApp, nextTick, onBeforeUnmount, onMounted, reactive, ref } = Vue;
 const maxLocalPointsPerStroke = 5000;
+const maxLocalStrokes = 1000;
 
-createApp({
+async function loadTemplates() {
+  const response = await fetch("canvas.html");
+  if (!response.ok) {
+    throw new Error(`No s'ha pogut carregar canvas.html: ${response.status}`);
+  }
+  return response.text();
+}
+
+const app = createApp({
   setup() {
     const username = ref("");
     const roomName = ref("");
@@ -87,6 +96,13 @@ createApp({
       }
       for (let index = 1; index < stroke.points.length; index += 1) {
         drawSegment(stroke, stroke.points[index - 1], stroke.points[index]);
+      }
+    }
+
+    function storeStroke(stroke) {
+      strokes.value.push(stroke);
+      if (strokes.value.length > maxLocalStrokes) {
+        strokes.value.shift();
       }
     }
 
@@ -181,7 +197,7 @@ createApp({
         tool: activeTool.value,
         points: [previousPoint],
       };
-      strokes.value.push(activeStroke);
+      storeStroke(activeStroke);
       renderStroke(activeStroke);
       socket.emit("draw_begin", {
         point: previousPoint,
@@ -280,7 +296,7 @@ createApp({
     }
 
     function handleDrawBegin({ stroke }) {
-      strokes.value.push(stroke);
+      storeStroke(stroke);
       activeRemoteStrokes.set(stroke.id, stroke);
       renderStroke(stroke);
     }
@@ -407,4 +423,16 @@ createApp({
       canvasElement,
     };
   },
-}).mount("#app");
+});
+
+loadTemplates()
+  .then((templates) => {
+    const appElement = document.querySelector("#app");
+    appElement.insertAdjacentHTML("beforeend", templates);
+    app.mount(appElement);
+  })
+  .catch((loadError) => {
+    console.error("No s'han pogut carregar les vistes de PaintRooms.", loadError);
+    document.querySelector("#app").innerHTML =
+      '<p role="alert">No s\'ha pogut carregar l\'aplicació. Torna-ho a provar.</p>';
+  });

@@ -15,7 +15,7 @@
   </head>
   <body>
     <main id="app">
-      <section v-if="!inRoom" class="lobby">
+      <div v-if="!inRoom" class="lobby">
         <form class="lobby-card" @submit.prevent="joinRoom()">
           <label for="username">El teu nom</label>
           <input
@@ -69,144 +69,11 @@
             </ul>
           </section>
           <p class="connection-note" :data-state="connected ? 'connected' : 'offline'">
-            <span class="status-dot"></span>
+            <span class="status-dot" aria-hidden="true"></span>
             {{ connected ? "Connexió en directe" : "Connectant amb el servidor..." }}
           </p>
         </form>
-      </section>
-
-      <section v-else class="room-screen">
-        <header class="toolbar">
-          <div class="toolbar-brand">
-            <h1>{{ currentRoom }}</h1>
-          </div>
-          <div class="drawing-tools" aria-label="Controls de dibuix">
-            <label class="color-control" title="Color del traç">
-              <span>Color</span>
-              <input v-model="brushColor" type="color" aria-label="Color del traç" />
-            </label>
-            <label class="width-control">
-              <span>Gruix</span>
-              <input
-                v-model.number="brushWidth"
-                type="range"
-                min="1"
-                max="24"
-                aria-label="Gruix del traç"
-              />
-              <output>{{ brushWidth }} px</output>
-            </label>
-            <span class="tool-divider" aria-hidden="true"></span>
-            <button
-              class="tool-button"
-              :class="{ selected: activeTool === 'brush' }"
-              type="button"
-              :aria-pressed="activeTool === 'brush'"
-              @click="activeTool = 'brush'"
-            >
-              Pinzell
-            </button>
-            <button
-              class="tool-button eraser-tool"
-              :class="{ selected: activeTool === 'eraser' }"
-              type="button"
-              :aria-pressed="activeTool === 'eraser'"
-              @click="activeTool = 'eraser'"
-            >
-              Esborrador
-            </button>
-          </div>
-          <div class="toolbar-end">
-            <span class="room-connection" :data-state="connected ? 'connected' : 'offline'">
-              <span class="status-dot"></span>
-              {{ connected ? "En directe" : "Reconnexió..." }}
-            </span>
-            <div class="room-menu">
-              <button
-                class="menu-trigger"
-                type="button"
-                :aria-expanded="menuOpen"
-                aria-controls="room-menu-panel"
-                @click="menuOpen = !menuOpen"
-              >
-                Sala
-                <span class="menu-count">{{ users.length }}</span>
-                <span class="menu-chevron" aria-hidden="true">{{ menuOpen ? "⌃" : "⌄" }}</span>
-              </button>
-              <section
-                v-if="menuOpen"
-                id="room-menu-panel"
-                class="menu-panel"
-                aria-label="Menú de sala"
-              >
-                <div class="menu-heading">
-                  <div>
-                    <p class="eyebrow">ESPAI COMPARTIT</p>
-                    <h2>Participants <span>{{ users.length }}</span></h2>
-                  </div>
-                  <button
-                    class="menu-close"
-                    type="button"
-                    aria-label="Tancar menú"
-                    @click="menuOpen = false"
-                  >
-                    ×
-                  </button>
-                </div>
-                <ul class="participant-list">
-                  <li v-for="user in users" :key="user.id">
-                    <span class="participant-avatar" :style="{ '--user-color': user.color }">
-                      {{ user.username.slice(0, 1).toUpperCase() }}
-                    </span>
-                    <span class="participant-name">{{ user.username }}</span>
-                    <span v-if="user.id === selfId" class="you-label">Tu</span>
-                  </li>
-                </ul>
-                <p class="sidebar-hint">
-                  Mantén premut el ratolí o toca la pissarra per dibuixar.
-                </p>
-                <div class="menu-actions">
-                  <button class="menu-action clear-action" type="button" @click="clearCanvas">
-                    Netejar pissarra
-                  </button>
-                  <button class="menu-action leave-action" type="button" @click="leaveRoom">
-                    Sortir de la sala
-                  </button>
-                </div>
-              </section>
-            </div>
-          </div>
-        </header>
-
-        <div class="workspace">
-          <div
-            ref="boardElement"
-            class="board"
-            :class="{ 'eraser-active': activeTool === 'eraser' }"
-            aria-label="Pissarra compartida. Dibuixa arrossegant o fent lliscar el dit."
-            @pointerdown="startDrawing"
-            @pointermove="movePointer"
-            @pointerup="stopDrawing"
-            @pointercancel="stopDrawing"
-            @lostpointercapture="stopDrawing"
-            @pointerleave="hidePointer"
-          >
-            <canvas ref="canvasElement"></canvas>
-            <span
-              v-for="cursor in cursors"
-              v-show="cursor.visible"
-              :key="cursor.id"
-              class="cursor-indicator"
-              :style="cursorStyle(cursor)"
-              aria-hidden="true"
-            >
-              <span class="cursor-dot"></span>
-              <span class="cursor-name">{{ cursor.username }}</span>
-            </span>
-            <p v-if="error" class="canvas-error" role="alert">{{ error }}</p>
-          </div>
-        </div>
-      </section>
+      </div>
     </main>
   </body>
 </html>

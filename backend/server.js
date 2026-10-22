@@ -12,6 +12,7 @@ const rooms = new Map();
 const publicFiles = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
+  ["/canvas.html", ["canvas.html", "text/html; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/script.js", ["script.js", "text/javascript; charset=utf-8"]],
   [
@@ -88,11 +89,15 @@ function roomUsers(room) {
   }));
 }
 
-function publishRoomList() {
-  const roomList = [...rooms.values()]
+function getRoomList() {
+  return [...rooms.values()]
     .filter((room) => room.users.size > 0)
     .map((room) => ({ name: room.name, users: room.users.size }))
     .sort((first, second) => first.name.localeCompare(second.name));
+}
+
+function publishRoomList() {
+  const roomList = getRoomList();
   io.emit("room_list", roomList);
 }
 
@@ -171,13 +176,7 @@ function reportError(socket, message) {
 }
 
 io.on("connection", (socket) => {
-  socket.emit(
-    "room_list",
-    [...rooms.values()]
-      .filter((room) => room.users.size > 0)
-      .map((room) => ({ name: room.name, users: room.users.size }))
-      .sort((first, second) => first.name.localeCompare(second.name)),
-  );
+  socket.emit("room_list", getRoomList());
 
   socket.on("join_room", (payload, acknowledge) => {
     const reply = typeof acknowledge === "function" ? acknowledge : () => {};
