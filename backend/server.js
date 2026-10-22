@@ -167,7 +167,11 @@ function removeFromRoom(socket) {
   endActiveStroke(socket, room);
   room.users.delete(socket.id);
   socket.leave(user.roomKey);
-  publishRoomUsers(user.roomKey);
+  if (room.users.size === 0) {
+    rooms.delete(room.key);
+  } else {
+    publishRoomUsers(user.roomKey);
+  }
   publishRoomList();
 }
 
